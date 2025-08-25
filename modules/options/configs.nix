@@ -73,6 +73,11 @@ let
         type = lib.types.listOf (lib.types.str);
         default = [ ];
       };
+      primaryUser = lib.mkOption {
+        description = "Username of the primary user on this host";
+        type = lib.types.str;
+        default = "user";
+      };
       extra = lib.mkOption {
         description = "Extra attributes for the host";
         type = lib.types.attrsOf lib.types.anything;

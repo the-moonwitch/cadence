@@ -1,15 +1,28 @@
-{ inputs, lib, ... }:
+{
+  inputs,
+  lib,
+  pkgs,
+  ...
+}:
 let
-  hostsList = lib.attrsToList inputs.self.hosts;
-  hostsByClass = builtins.groupBy (host: host.value.class) hostsList;
-  nixosHosts = builtins.listToAttrs hostsByClass.nixos;
-  darwinHosts = builtins.listToAttrs hostsByClass.darwin;
-  homeHosts = builtins.listToAttrs hostsByClass.home-manager;
-
   mkHostConfig =
     label:
-    { features, ... }:
+    {
+      features,
+      primaryUser,
+      class,
+      hostname,
+      system,
+      ...
+    }:
     let
+      inherit (inputs.self.hosts.${label})
+        features
+        class
+        hostname
+        system
+        primaryUser
+        ;
       allFeatures = builtins.attrNames (inputs.self.dependencies // inputs.self.features);
       hostDeps =
         features
@@ -27,7 +40,7 @@ let
           key = feature;
         };
       keys = builtins.genericClosure {
-        startSet = builtins.map toKey hostDeclaredFeatures;
+        startSet = builtins.map toKey hostDeps;
         operator = { key }: builtins.map toKey (inputs.self.dependencies.${key} or [ ]);
       };
       hostFeaturesAndTags = builtins.map ({ key }: key) keys;
@@ -36,24 +49,39 @@ let
         builtins.map (f: builtins.removeAttrs inputs.self.features.${f} [ "extra" ]) hostFeatures
       );
       applicableImpls = builtins.filter (impl: impl.pred label) featureImpls;
-      hostFeatureImpls =
-        builtins.foldl'
-          (acc: elem: {
-            nixos = acc.nixos ++ [ elem.nixos ];
-            darwin = acc.darwin ++ [ elem.darwin ];
-            home = acc.home ++ [ elem.home ];
-          })
-          {
-            nixos = [ ];
-            darwin = [ ];
-            home = [ ];
-          }
-          applicableImpls;
+      hostFeatureImpls = builtins.zipAttrsWith (_: values: values) applicableImpls;
+      homeModule = {
+        home-manager.users.${primaryUser}.imports = hostFeatureImpls.home;
+      };
     in
-    "TODO";
+    {
+      nixosConfigurations.${if class == "nixos" then hostname else null} = pkgs.lib.nixosSystem {
+        inherit system;
+        specialArgs.host = label;
+        modules = hostFeatureImpls.nixos ++ [
+          inputs.home-manager.nixosModules.home-manager
+          homeModule
+        ];
+      };
+      darwinConfigurations.${if class == "darwin" then hostname else null} = pkgs.lib.darwinSystem {
+        specialArgs.host = label;
+        modules = hostFeatureImpls.darwin ++ [
+          inputs.home-manager.darwinModules.home-manager
+          homeModule
+        ];
+      };
+      homeConfigurations."${primaryUser}@${hostname}" = inputs.home-manager.lib.homeManagerConfiguration {
+        pkgs = inputs.nixpkgs.legacyPackages.${system};
+        extraSpecialArgs.host = label;
+        modules = hostFeatureImpls.home;
+      };
+    };
+  configs = builtins.zipAttrsWith (_: values: values) (
+    builtins.map (label: mkHostConfig label) (builtins.attrNames inputs.self.hosts)
+  );
 in
 {
-  flake.nixosConfigurations = "TODO";
-  flake.darwinConfigurations = "TODO";
-  flake.homeConfigurations = "TODO";
+  flake.nixosConfigurations = configs.nixosConfigurations;
+  flake.darwinConfigurations = configs.darwinConfigurations;
+  flake.homeConfigurations = configs.homeConfigurations;
 }

@@ -1,0 +1,9 @@
+.jj/
+.vscode/
+*.code-workspace
+.idea/
+*.iml
+out/
+result*
+.DS_Store
+Thumbs.db
