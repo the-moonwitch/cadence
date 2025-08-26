@@ -1,33 +1,37 @@
-{ lib, inputs, ... }:
 {
-  flake.lib =
+  config,
+  lib,
+  ...
+}:
+{
+  options.cadence.lib = lib.mkOption {
+    type = lib.types.attrsOf lib.types.anything;
+    default = { };
+  };
+
+  config.cadence.lib =
     let
+      hostDef = hostKey: config.cadence.hosts.${hostKey};
+
       classFeature =
         class:
         let
-          pred = h: (hostDef h).class == class;
-        in
-        mod: {
-          system = {
-            inherit pred;
-            ${class} = mod;
-          };
-          home = mod: {
-            inherit pred;
-            home = mod;
-          };
-          __functor =
+          mkClassFeature =
             {
               system ? { },
               home ? { },
             }:
             {
-              inherit home pred;
+              inherit home;
+              pred = h: (hostDef h).class == class;
               ${class} = system;
             };
+        in
+        {
+          system = mod: mkClassFeature { system = mod; };
+          home = mod: mkClassFeature { home = mod; };
+          __functor = _: mkClassFeature;
         };
-
-      hostDef = hostKey: inputs.self.hosts.${hostKey};
       /**
         Define a feature that will only apply to a specific host.
 
@@ -58,9 +62,10 @@
       hostFeature =
         hostKey:
         let
+          def = hostDef hostKey;
           notSystemErr = "Host ${hostKey} is not a system host but tried to call `hostFeature.system \"${hostKey}\"`";
           pred = h: h == hostKey;
-          systemKey = if hostDef.class == "home-manager" then null else hostDef.class;
+          systemKey = if def.class == "home-manager" then null else def.class;
         in
         {
           system =
@@ -77,6 +82,7 @@
             home = mod;
           };
           __functor =
+            _:
             {
               system ? { },
               home ? { },
@@ -86,14 +92,17 @@
               ${if systemKey == null && system != { } then throw notSystemErr else systemKey} = system;
             };
         };
-
       nixosFeature = classFeature "nixos";
       darwinFeature = classFeature "darwin";
+      systemFeature = mod: {
+        pred = hostKey: (hostDef hostKey).class != "home-manager";
+        darwin = mod;
+        nixos = mod;
+      };
       homeFeature = mod: {
         pred = hostKey: (hostDef hostKey).class == "home-manager";
         home = mod;
       };
-
     in
     {
       inherit
@@ -102,6 +111,7 @@
         darwinFeature
         homeFeature
         hostFeature
+        systemFeature
         ;
     };
 

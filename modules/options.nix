@@ -5,9 +5,6 @@ let
   functionType = lib.mkOptionType {
     name = "function";
     check = f: builtins.isFunction f || (f ? __functor);
-    merge =
-      _: defs: hostdef:
-      builtins.all (builtins.map ({ value, ... }: value hostdef) defs);
     emptyValue = constTrue;
   };
 
@@ -17,6 +14,7 @@ let
       description = "The ${targetName} definition of the feature.";
       type = lib.types.deferredModule;
       default = { };
+      apply = (mod: { imports = [ mod ]; });
     };
 
   featureImpl = lib.types.submodule {
@@ -33,18 +31,6 @@ let
       home = targetDef "home-manager";
       nixos = targetDef "nixos";
       darwin = targetDef "darwin";
-    };
-  };
-
-  feature = lib.types.submodule {
-    options = {
-      freeformType = lib.types.attrsOf featureImpl;
-
-      extra = lib.mkOption {
-        description = "Extra metadata for the feature";
-        type = lib.types.attrsOf lib.types.anything;
-        default = { };
-      };
     };
   };
 
@@ -73,7 +59,7 @@ let
         type = lib.types.listOf (lib.types.str);
         default = [ ];
       };
-      primaryUser = lib.mkOption {
+      username = lib.mkOption {
         description = "Username of the primary user on this host";
         type = lib.types.str;
         default = "user";
@@ -87,49 +73,53 @@ let
   };
 in
 {
-  flake.lib.types = {
-    inherit feature host featureImpl;
-  };
+  config.cadence.lib.types = { inherit host featureImpl; };
 
-  options.flake = {
-    features = lib.mkOption {
-      description = "Feature definitions";
-      type = lib.types.attrsOf feature;
-      example = lib.literalExpression ''
-        features.enable-ssh = {
-          nixos = cadence.lib.nixosFeature {
-              services.openssh.enable = true;
+  options.cadence = lib.mkOption {
+    description = "Cadence configuration";
+    type = lib.types.submodule {
+      options = {
+        features = lib.mkOption {
+          description = "Feature definitions";
+          type = lib.types.lazyAttrsOf (lib.types.lazyAttrsOf featureImpl);
+          example = lib.literalExpression ''
+            features.enable-ssh = {
+              nixos = cadence.lib.nixosFeature.system {
+                  services.openssh.enable = true;
+                };
+              };
             };
-          };
+          '';
+          default = { };
         };
-      '';
-    };
 
-    dependencies = lib.mkOption {
-      descriptions = ''
-        Dependencies for each feature; features belonging to each tag or group.
-      '';
-      type = lib.types.attrsOf (lib.types.listOf lib.types.str);
-      default = { };
-      example = lib.literalExpression ''
-        dependencies.group-desktop = [ "desktop-manager" "browser" ];
-        dependencies.desktop-manager = [ "gnome" ];
-        dependencies.gnome = [ "x11" ];
-      '';
-    };
-
-    hosts = lib.mkOption {
-      description = "Host configurations";
-      type = lib.types.attrsOf host;
-      default = { };
-      example = lib.literalExpression ''
-        hosts.my-host = {
-          hostname = "my-host";
-          system = "x86_64-linux";
-          class = "nixos";
-          features = [ "group-desktop" "vscode" "enable-ssh" ];
+        dependencies = lib.mkOption {
+          description = ''
+            Dependencies for each feature; features belonging to each tag or group.
+          '';
+          type = lib.types.attrsOf (lib.types.listOf lib.types.str);
+          default = { };
+          example = lib.literalExpression ''
+            dependencies.group-desktop = [ "desktop-manager" "browser" ];
+            dependencies.desktop-manager = [ "gnome" ];
+            dependencies.gnome = [ "x11" ];
+          '';
         };
-      '';
+
+        hosts = lib.mkOption {
+          description = "Host configurations";
+          type = lib.types.attrsOf host;
+          default = { };
+          example = lib.literalExpression ''
+            cadence.hosts.my-host = {
+              hostname = "my-host";
+              system = "x86_64-linux";
+              class = "nixos";
+              features = [ "group-desktop" "vscode" "enable-ssh" ];
+            };
+          '';
+        };
+      };
     };
   };
 }
