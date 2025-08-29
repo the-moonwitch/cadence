@@ -11,5 +11,7 @@
         ./options.nix
         ./lib.nix
       ];
+
+      cadence.features = { };
     };
 }

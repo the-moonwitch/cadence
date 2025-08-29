@@ -1,5 +1,14 @@
-{ lib, inputs, ... }:
+{
+  lib,
+  inputs,
+  moduleLocation,
+  ...
+}:
 let
+  inherit (lib.strings)
+    escapeNixIdentifier
+    ;
+
   constTrue = lib.const true;
 
   functionType = lib.mkOptionType {
@@ -7,14 +16,12 @@ let
     check = f: builtins.isFunction f || (f ? __functor);
     emptyValue = constTrue;
   };
-
   targetDef =
     targetName:
     lib.mkOption {
       description = "The ${targetName} definition of the feature.";
       type = lib.types.deferredModule;
       default = { };
-      apply = (mod: { imports = [ mod ]; });
     };
 
   featureImpl = lib.types.submodule {
@@ -91,6 +98,25 @@ in
             };
           '';
           default = { };
+          apply =
+            features:
+            lib.mapAttrs (
+              featureName: impls:
+              lib.mapAttrs (
+                implName: impl:
+                lib.mapAttrs (
+                  key: module:
+                  if key == "pred" then
+                    module
+                  else
+                    {
+                      _class = key;
+                      _file = "${toString moduleLocation}#cadence.features.${escapeNixIdentifier featureName}.${escapeNixIdentifier implName}.${escapeNixIdentifier key}";
+                      imports = [ module ];
+                    }
+                ) impl
+              ) impls
+            ) features;
         };
 
         dependencies = lib.mkOption {
