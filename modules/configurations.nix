@@ -2,115 +2,160 @@
   inputs,
   lib,
   config,
+  self,
   ...
 }:
 let
-  mkHostConfig =
-    label: hostDef:
+  inherit (inputs.cadence.lib) const;
+  inherit (builtins)
+    attrNames
+    attrValues
+    concatLists
+    concatMap
+    concatStringsSep
+    elem
+    filter
+    foldl'
+    genericClosure
+    getAttr
+    map
+    ;
+  cfg = config.cadence;
+  # TODO: Feature trees group/feature
+  featureNames =
+    attrNames cfg.dependencies ++ concatMap attrNames (attrValues self.modules);
+
+  resolveDeps =
+    deps:
     let
-      inherit (hostDef)
-        features
-        class
-        hostname
-        system
-        username
-        ;
-      allFeatures = builtins.attrNames (config.cadence.dependencies // config.cadence.features);
-      hostDeps =
-        features
-        ++ (lib.optional (lib.elem "base" allFeatures) "base")
-        ++ (lib.optional (lib.elem label allFeatures) label);
-      toKey =
-        feature:
+      validate =
+        key:
         assert
-          lib.elem feature allFeatures
+          lib.elem key featureNames
           || throw ''
-            Undefined feature `${feature}` while resolving host `${label}`.
-            Known features: [ ${builtins.concatStringsSep ", " allFeatures} ];
+            Undefined feature `${key}`.
+            Known features: [ ${concatStringsSep ", " featureNames} ]
           '';
         {
-          key = feature;
+          inherit key;
         };
-      keys = builtins.genericClosure {
-        startSet = builtins.map toKey hostDeps;
-        operator = { key }: builtins.map toKey (config.cadence.dependencies.${key} or [ ]);
-      };
-      hostFeaturesAndTags = builtins.map ({ key }: key) keys;
-      hostFeatures = builtins.filter (f: builtins.hasAttr f config.cadence.features) hostFeaturesAndTags;
-      hostFeatureDefs = builtins.map (f: {
-        name = f;
-        value = config.cadence.features.${f};
-      }) hostFeatures;
-      featureImpls =
-        featureLabel: impls:
-        builtins.map (
-          { name, value }:
-          {
-            featureName = featureLabel;
-            implName = name;
-            impl = value;
+      resolvedFeatures = lib.pipe deps [
+        (map validate)
+        (
+          keys:
+          genericClosure {
+            startSet = keys;
+            operator = { key }: map validate (cfg.dependencies.${key} or [ ]);
           }
-        ) impls;
-      hostFeatureImpls = lib.flatten (
-        builtins.map (
-          { name, value }: featureImpls name (lib.attrsToList (builtins.removeAttrs value [ "extra" ]))
-        ) hostFeatureDefs
-      );
-      applicableImpls = builtins.filter (i: i.impl.pred label) hostFeatureImpls;
+        )
+        (filter ({ key }: elem key featureNames))
+        (map (getAttr "key"))
+        lib.unique
+      ];
+    in
+    resolvedFeatures;
+
+  hostConfig =
+    hostDef:
+    let
+      class = hostDef.class;
+      systemClass = if class == const.class.homeManager then null else class;
+      baseFeatures = lib.unique (concatLists [
+        hostDef.features
+        (lib.optional (elem "base" featureNames) "base")
+        (lib.optional (elem hostDef.label featureNames) hostDef.label)
+      ]);
+      resolvedFeatures = resolveDeps baseFeatures;
+      resolvedModules =
+        moduleType:
+        builtins.filter (f: f != null) (
+          builtins.map (
+            f: inputs.self.modules.${moduleType}.${f} or null
+          ) resolvedFeatures
+        );
+      homeDir =
+        if hostDef.class == "darwin" then
+          "/Users/${hostDef.username}"
+        else
+          "/home/${hostDef.username}";
       homeModule = {
-        home-manager.users.${username} = {
-          imports = builtins.map (i: i.impl.home) applicableImpls;
+        home-manager.useGlobalPkgs = true;
+        home-manager.useUserPackages = true;
+        home-manager.users.${hostDef.username} = {
+          _module.args = {
+            host = hostDef;
+            home = homeDir;
+          };
+          imports = resolvedModules "homeManager";
+        };
+      };
+
+      systemConfig = {
+        nixos = inputs.nixpkgs.lib.nixosSystem {
+          inherit (hostDef) system;
+          specialArgs = {
+            host = hostDef;
+            home = homeDir;
+          };
+          modules = [
+            inputs.home-manager.nixosModules.home-manager
+            homeModule
+            {
+              nixpkgs.hostPlatform = hostDef.system;
+              networking.hostName = hostDef.hostname;
+            }
+          ]
+          ++ resolvedModules "nixos";
+        };
+        darwin = inputs.nix-darwin.lib.darwinSystem {
+          inherit (hostDef) system;
+          specialArgs = {
+            host = hostDef;
+            home = homeDir;
+          };
+          modules = [
+            inputs.home-manager.darwinModules.home-manager
+            homeModule
+            { nixpkgs.hostPlatform = hostDef.system; }
+          ]
+          ++ resolvedModules "darwin";
         };
       };
     in
     {
-      nixosConfigurations = {
-        ${if class == "nixos" then hostname else null} = inputs.nixpkgs.lib.nixosSystem {
-          inherit system;
-          specialArgs.host = label;
-          modules = (builtins.map (i: i.impl.nixos) applicableImpls) ++ [
-            {
-              nixpkgs.hostPlatform = system;
-              networking.hostName = hostname;
-            }
-            inputs.home-manager.nixosModules.home-manager
-            homeModule
-          ];
-        };
-      };
-      darwinConfigurations = {
-        ${if class == "darwin" then hostname else null} = inputs.nixpkgs.lib.darwinSystem {
-          specialArgs.host = label;
-          modules = (builtins.map (i: i.impl.darwin) applicableImpls) ++ [
-            inputs.home-manager.darwinModules.home-manager
-            homeModule
-          ];
-        };
-      };
-      homeConfigurations = {
-        "${username}@${hostname}" = inputs.home-manager.lib.homeManagerConfiguration {
-          pkgs = inputs.nixpkgs.legacyPackages.${system};
-          extraSpecialArgs.host = label;
-          modules = (builtins.map (i: i.impl.home) applicableImpls);
-        };
-      };
+      ${
+        lib.mapNullable (sc: "${sc}Configurations") systemClass
+      }.${hostDef.hostname} =
+        systemConfig.${systemClass};
+      homeConfigurations."${hostDef.username}@${hostDef.hostname}" =
+        inputs.home-manager.lib.homeManagerConfiguration
+          {
+            pkgs = inputs.nixpkgs.legacyPackages.${hostDef.system};
+            modules = [
+              { nixpkgs.config.allowUnfree = true; }
+            ]
+            ++ resolvedModules "homeManager";
+            extraSpecialArgs = {
+              host = hostDef;
+              home = homeDir;
+            };
+          };
     };
 
-  # Handle the no-hostconfig case
-  flake =
-    builtins.foldl'
-      (l: r: {
-        nixosConfigurations = l.nixosConfigurations // r.nixosConfigurations;
-        darwinConfigurations = l.darwinConfigurations // r.darwinConfigurations;
-        homeConfigurations = l.homeConfigurations // r.homeConfigurations;
-      })
-      {
-        nixosConfigurations = { };
-        darwinConfigurations = { };
-        homeConfigurations = { };
-      }
-      (lib.mapAttrsToList mkHostConfig config.cadence.hosts);
+  configurations = lib.pipe config.cadence.hosts [
+    attrNames
+    (map (label: config.cadence.hosts.${label} // { inherit label; }))
+    (map hostConfig)
+    (foldl' lib.recursiveUpdate {
+      nixosConfigurations = { };
+      darwinConfigurations = { };
+      homeConfigurations = { };
+    })
+  ];
+
 in
 {
-  inherit flake;
+  flake.nixosConfigurations = configurations.nixosConfigurations;
+  flake.darwinConfigurations = configurations.darwinConfigurations;
+  flake.homeConfigurations = configurations.homeConfigurations;
 }

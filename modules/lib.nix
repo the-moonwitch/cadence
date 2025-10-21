@@ -1,118 +1,45 @@
-{
-  config,
-  lib,
-  ...
-}:
-{
-  options.cadence.lib = lib.mkOption {
-    type = lib.types.attrsOf lib.types.anything;
-    default = { };
-  };
+inputs:
+let
+  inherit (inputs.nixpkgs-lib) lib;
+  const = import ./_const.nix;
 
-  config.cadence.lib =
+  feature =
     let
-      hostDef = hostKey: config.cadence.hosts.${hostKey};
-
-      classFeature =
-        class:
-        let
-          mkClassFeature =
-            {
-              system ? { },
-              home ? { },
-            }:
-            {
-              inherit home;
-              pred = h: (hostDef h).class == class;
-              ${class} = system;
-            };
-        in
+      mkFeature =
+        name:
         {
-          system = mod: mkClassFeature { system = mod; };
-          home = mod: mkClassFeature { home = mod; };
-          __functor = _: mkClassFeature;
-        };
-      /**
-        Define a feature that will only apply to a specific host.
-
-        # Example
-
-        ```nix
-        features.hetznerSetup.def = (hostFeature "hetzner-vps").home {
-          programs.fish.enable = true;
-        };
-        ```
-
-        # Type
-
-        ```
-        hostFeature :: string -> module -> cadence.lib.types.featureImpl;
-        ```
-
-        # Arguments
-
-        hostKey
-        : The key of the host definition in `hosts`
-
-        mod
-        : The module definition to use for the host.
-      */
-
-      # TODO fix doc for functors
-      hostFeature =
-        hostKey:
-        let
-          def = hostDef hostKey;
-          notSystemErr = "Host ${hostKey} is not a system host but tried to call `hostFeature.system \"${hostKey}\"`";
-          pred = h: h == hostKey;
-          systemKey = if def.class == "home-manager" then null else def.class;
-        in
+          nixos ? { },
+          darwin ? { },
+          homeManager ? { },
+        }:
         {
-          system =
-            mod:
-            if systemKey == null then
-              throw notSystemErr
-            else
-              {
-                inherit pred;
-                ${systemKey} = mod;
-              };
-          home = mod: {
-            inherit pred;
-            home = mod;
-          };
-          __functor =
-            _:
-            {
-              system ? { },
-              home ? { },
-            }:
-            {
-              inherit home pred;
-              ${if systemKey == null && system != { } then throw notSystemErr else systemKey} = system;
-            };
+          ${if nixos == { } then null else const.class.nixos}.${name} = nixos;
+          ${if homeManager == { } then null else const.class.homeManager}.${name} =
+            homeManager;
+          ${if darwin == { } then null else const.class.darwin}.${name} = darwin;
         };
-      nixosFeature = classFeature "nixos";
-      darwinFeature = classFeature "darwin";
-      systemFeature = mod: {
-        pred = hostKey: (hostDef hostKey).class != "home-manager";
-        darwin = mod;
-        nixos = mod;
-      };
-      homeFeature = mod: {
-        pred = hostKey: (hostDef hostKey).class == "home-manager";
-        home = mod;
-      };
     in
     {
-      inherit
-        hostDef
-        nixosFeature
-        darwinFeature
-        homeFeature
-        hostFeature
-        systemFeature
-        ;
+      nixos = name: nixos: mkFeature name { inherit nixos; };
+      darwin = name: darwin: mkFeature name { inherit darwin; };
+      homeManager = name: homeManager: mkFeature name { inherit homeManager; };
+      system =
+        name: mod:
+        mkFeature name {
+          nixos = mod;
+          darwin = mod;
+        };
+      __functor = _: mkFeature;
     };
 
+  features =
+    featList:
+    builtins.foldl' (acc: f: lib.recursiveUpdate acc f) {
+      nixos = { };
+      darwin = { };
+      homeManager = { };
+    } featList;
+in
+{
+  inherit feature features const;
 }

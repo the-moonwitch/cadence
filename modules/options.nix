@@ -1,45 +1,6 @@
-{
-  lib,
-  inputs,
-  moduleLocation,
-  ...
-}:
+{ lib, inputs, ... }:
 let
-  inherit (lib.strings)
-    escapeNixIdentifier
-    ;
-
-  constTrue = lib.const true;
-
-  functionType = lib.mkOptionType {
-    name = "function";
-    check = f: builtins.isFunction f || (f ? __functor);
-    emptyValue = constTrue;
-  };
-  targetDef =
-    targetName:
-    lib.mkOption {
-      description = "The ${targetName} definition of the feature.";
-      type = lib.types.deferredModule;
-      default = { };
-    };
-
-  featureImpl = lib.types.submodule {
-    options = {
-      pred = lib.mkOption {
-        description = ''
-          Necessary precondition for the feature.
-          Should be a function from a host key to bool, returning true if the feature
-          can be enabled on that host.'';
-        type = functionType;
-        default = constTrue;
-        defaultText = lib.literalExpression "lib.const true";
-      };
-      home = targetDef "home-manager";
-      nixos = targetDef "nixos";
-      darwin = targetDef "darwin";
-    };
-  };
+  const = import ./_const.nix;
 
   host = lib.types.submodule {
     options = {
@@ -54,11 +15,7 @@ let
       };
       class = lib.mkOption {
         description = "The class of the host";
-        type = lib.types.enum [
-          "nixos"
-          "darwin"
-          "home-manager"
-        ];
+        type = lib.types.enum (builtins.attrValues const.class);
         default = "nixos";
       };
       features = lib.mkOption {
@@ -80,45 +37,10 @@ let
   };
 in
 {
-  config.cadence.lib.types = { inherit host featureImpl; };
-
   options.cadence = lib.mkOption {
     description = "Cadence configuration";
     type = lib.types.submodule {
       options = {
-        features = lib.mkOption {
-          description = "Feature definitions";
-          type = lib.types.lazyAttrsOf (lib.types.lazyAttrsOf featureImpl);
-          example = lib.literalExpression ''
-            features.enable-ssh = {
-              nixos = cadence.lib.nixosFeature.system {
-                  services.openssh.enable = true;
-                };
-              };
-            };
-          '';
-          default = { };
-          apply =
-            features:
-            lib.mapAttrs (
-              featureName: impls:
-              lib.mapAttrs (
-                implName: impl:
-                lib.mapAttrs (
-                  key: module:
-                  if key == "pred" then
-                    module
-                  else
-                    {
-                      _class = key;
-                      _file = "${toString moduleLocation}#cadence.features.${escapeNixIdentifier featureName}.${escapeNixIdentifier implName}.${escapeNixIdentifier key}";
-                      imports = [ module ];
-                    }
-                ) impl
-              ) impls
-            ) features;
-        };
-
         dependencies = lib.mkOption {
           description = ''
             Dependencies for each feature; features belonging to each tag or group.
